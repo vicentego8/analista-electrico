@@ -156,12 +156,14 @@
     </div>
 
     <div class="card" id="cardProd" hidden>
-      <h2>Producción vs boleta</h2>
-      <div class="sub">kWh por mes. Lo que produjeron los paneles (FusionSolar) al lado de lo que dice Enel.</div>
-      <div class="leyenda"><span><i style="background:#EF9F27"></i>Producción paneles</span><span><i style="background:#5DCAA5"></i>Inyección (Enel)</span><span><i style="background:#F0997B"></i>Consumo red (Enel)</span></div>
-      <div class="chart"><canvas id="cProd"></canvas></div>
+      <h2>Paneles vs boleta</h2>
+      <div class="sub">kWh por boleta. Lo que generaron los paneles, separado en lo que usó tu casa y lo que se fue a la red, al lado de lo que compraste a la red.</div>
+      <div id="prodGraf">
+        <div class="leyenda"><span><i style="background:#EF9F27"></i>Sol usado en casa</span><span><i style="background:#5DCAA5"></i>Sol inyectado</span><span><i style="background:#F0997B"></i>Comprado a la red</span></div>
+        <div class="chart"><canvas id="cProd"></canvas></div>
+      </div>
       <div class="lista" id="listaProd" style="margin-top:8px"></div>
-      <div class="nota">Autoconsumo = producción − inyección: lo que tu casa usó directo de los paneles. La boleta Enel no corta justo el día 1, así que la comparación por mes es aproximada.</div>
+      <div class="nota">Sol usado en casa = generación (FusionSolar) − inyección (Enel). Cada boleta cubre desde el día después de la boleta anterior hasta su fecha, así que el cruce es aproximado en uno o dos días.</div>
     </div>
 
     <div class="card">
@@ -185,7 +187,7 @@ const LS_ENLACE = 'solar.enlace', LS_DATOS = 'solar.datos';
 const $ = id => document.getElementById(id);
 const clp = n => '$' + Math.round(n || 0).toLocaleString('es-CL');
 const num = n => Math.round(n || 0).toLocaleString('es-CL');
-let todos = [], rango = 12, charts = {}, solar = null, produccion = [];
+let todos = [], rango = 12, charts = {}, solar = null, cicloActual = null;
 const kwh = (n, d) => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('es-CL', { maximumFractionDigits: d === undefined ? 1 : d });
 
 function leer(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
@@ -233,7 +235,7 @@ async function cargar(){
 function pintar(d, desdeCache){
   todos = (d.datos || []).filter(x => x && x.mes);
   solar = d.solar || null;
-  produccion = (d.produccion || []).filter(x => x && x.mes);
+  cicloActual = d.ciclo_actual || null;
   if (!todos.length) { mostrar('cargando'); $('cargando').innerHTML = '<div>☀️</div><div>Aún no hay boletas procesadas.</div>'; return; }
   const cuando = d.actualizado ? new Date(d.actualizado).toLocaleString('es-CL', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
   $('sub').textContent = todos.length + ' boletas · ' + (desdeCache ? 'guardado ' : 'al día ') + cuando;
@@ -280,7 +282,7 @@ function renderizar(){
   }).join('');
 
   dibujar(datos);
-  dibujarProd();
+  dibujarProd(datos);
 }
 
 function pintarSolar(){
@@ -304,38 +306,58 @@ function pintarSolar(){
     '<div class="nota">Dato de FusionSolar leído a las ' + hora + '. Huawei lo actualiza cada ~30 min.</div>';
 }
 
-function dibujarProd(){
+// Cruce por ciclo de boleta: generación (FusionSolar) vs inyección y compra (Enel).
+function dibujarProd(datos){
   const card = $('cardProd');
-  const filas = produccion.map(p => {
-    const b = todos.find(x => x.mes === p.mes) || null;
-    return { mes: p.mes, prod: p.kwh, dias: p.dias, iny: b ? b.inyeccion : null, cons: b ? b.consumo : null };
+  const fmtF = f => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-CL', { day: 'numeric', month: 'short' }) : '';
+  const completo = x => x.prod_kwh !== null && x.prod_kwh !== undefined && x.dias_ciclo && x.dias_prod >= x.dias_ciclo - 1;
+  const filas = datos.map(x => {
+    const ok = completo(x);
+    const auto = ok ? Math.max(0, x.prod_kwh - x.inyeccion) : null;
+    return { mes: x.mes, ok, prod: ok ? x.prod_kwh : null, auto, iny: x.inyeccion, cons: x.consumo,
+             casa: ok ? auto + x.consumo : null, parcial: !ok && x.dias_prod > 0 ? x.dias_prod + ' de ' + x.dias_ciclo : '' };
   });
-  if (!filas.length) { card.hidden = true; return; }
+  const conProd = filas.filter(f => f.ok);
+  const ca = cicloActual && cicloActual.dias_prod > 0 ? cicloActual : null;
+  if (!conProd.length && !ca) { card.hidden = true; return; }
   card.hidden = false;
+  $('prodGraf').hidden = !conProd.length;
 
-  $('listaProd').innerHTML = filas.slice().reverse().map(f => {
-    const auto = f.iny !== null ? f.prod - f.iny : null;
-    return '<div class="fila"><div class="mes">' + f.mes + '</div>' +
-      '<div class="det">☀️ ' + num(f.prod) + ' kWh producidos' + (f.dias < 28 ? ' <small>(' + f.dias + ' días anotados)</small>' : '') + '<br>' +
-      (f.iny !== null ? '↑ ' + num(f.iny) + ' inyectados · ↓ ' + num(f.cons) + ' de la red' : 'sin boleta de este mes todavía') + '</div>' +
-      '<div class="monto">' + (auto !== null ? num(auto) + ' kWh<small class="tenue">autoconsumo</small>' : '') + '</div></div>';
-  }).join('');
+  const lineas = [];
+  if (ca) lineas.push('<div class="fila"><div class="mes">En curso</div>' +
+    '<div class="det">☀️ ' + num(ca.prod_kwh) + ' kWh generados desde el ' + fmtF(ca.desde) +
+    (ca.dias_prod < ca.dias_ciclo ? ' <small>(' + ca.dias_prod + ' de ' + ca.dias_ciclo + ' días anotados)</small>' : '') +
+    '<br>la boleta dirá cuánto se inyectó</div><div class="monto"></div></div>');
+  filas.filter(f => f.ok || f.parcial).slice(-3).reverse().forEach(f => {
+    lineas.push('<div class="fila"><div class="mes">' + f.mes + '</div>' +
+      (f.ok
+        ? '<div class="det">☀️ ' + num(f.prod) + ' generados · ↑ ' + num(f.iny) + ' inyectados<br>' +
+          '🏠 ' + num(f.auto) + ' usados directo · ↓ ' + num(f.cons) + ' de la red</div>' +
+          '<div class="monto">' + (f.casa ? Math.round(f.auto / f.casa * 100) : 0) + '%<small class="tenue">casa con sol</small></div>'
+        : '<div class="det">faltan días de producción (' + f.parcial + ' anotados)</div><div class="monto"></div>') +
+      '</div>');
+  });
+  $('listaProd').innerHTML = lineas.join('');
 
-  if (typeof Chart === 'undefined') return;
+  if (!conProd.length || typeof Chart === 'undefined') return;
   const c = colores();
+  const desde = filas.findIndex(f => f.ok);
+  const vis = filas.slice(desde);
+  const barra = (label, data, color, stack) => ({ label, data, backgroundColor: color, stack, borderRadius: 3, barPercentage: .8, categoryPercentage: .75 });
   if (charts.p) charts.p.destroy();
   charts.p = new Chart($('cProd'), {
     type: 'bar',
-    data: { labels: filas.map(f => f.mes), datasets: [
-      { label: 'Producción', data: filas.map(f => f.prod), backgroundColor: '#EF9F27', borderRadius: 4, barPercentage: .75, categoryPercentage: .75 },
-      { label: 'Inyección', data: filas.map(f => f.iny), backgroundColor: '#5DCAA5', borderRadius: 4, barPercentage: .75, categoryPercentage: .75 },
-      { label: 'Consumo red', data: filas.map(f => f.cons), backgroundColor: '#F0997B', borderRadius: 4, barPercentage: .75, categoryPercentage: .75 }
+    data: { labels: vis.map(f => f.mes), datasets: [
+      barra('Sol usado en casa', vis.map(f => f.auto), '#EF9F27', 'sol'),
+      barra('Sol inyectado', vis.map(f => f.ok ? f.iny : null), '#5DCAA5', 'sol'),
+      barra('Comprado a la red', vis.map(f => f.cons), '#F0997B', 'red')
     ]},
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false },
-      tooltip: { callbacks: { label: t => t.dataset.label + ': ' + num(t.raw) + ' kWh' } } },
+      tooltip: { callbacks: { label: t => t.dataset.label + ': ' + num(t.raw) + ' kWh',
+        footer: items => { const f = vis[items[0].dataIndex]; return f.ok ? 'Generado: ' + num(f.prod) + ' kWh · casa: ' + num(f.casa) + ' kWh' : ''; } } } },
       scales: {
-        x: { ticks: { font: { size: 10 }, maxRotation: 0 }, grid: { display: false } },
-        y: { ticks: { font: { size: 10 }, callback: v => num(v) }, grid: { color: c.linea }, border: { display: false } }
+        x: { stacked: true, ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true }, grid: { display: false } },
+        y: { stacked: true, ticks: { font: { size: 10 }, callback: v => num(v) }, grid: { color: c.linea }, border: { display: false } }
       } }
   });
 }
