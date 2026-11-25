@@ -85,6 +85,15 @@
   .trio .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .trio .v small { font-size: 11px; font-weight: 500; color: var(--tenue); }
   .nota { font-size: 11.5px; color: var(--tenue); margin-top: 10px; }
+  .pred .big { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0; }
+  .pred .rango { font-size: 13px; color: var(--tenue); }
+  .barra { height: 8px; border-radius: 99px; background: var(--linea); overflow: hidden; margin: 10px 0 4px; }
+  .barra i { display: block; height: 100%; background: var(--verde); border-radius: 99px; }
+  .meses { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 12px; }
+  .meses div { text-align: center; font-size: 10.5px; color: var(--tenue); }
+  .meses .col { height: 56px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 3px; }
+  .meses .col i { display: block; width: 70%; border-radius: 3px 3px 0 0; background: #5DCAA5; min-height: 2px; }
+  .meses .col i.cero { background: #F0997B; }
 
   .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
   .tab { flex: 1; font: inherit; font-size: 13px; padding: 8px; border-radius: 10px; border: 1px solid var(--linea);
@@ -140,6 +149,8 @@
 
   <div id="contenido" hidden>
     <div class="hero" id="hero"></div>
+    <div class="card pred" id="cardPred" hidden></div>
+    <div class="card" id="cardCredito" hidden></div>
     <div class="card" id="solar" hidden></div>
     <div class="grid" id="metricas"></div>
 
@@ -271,6 +282,7 @@ function renderizar(){
   ].map(m => '<div class="m"><div class="lbl">'+m[0]+'</div><div class="v '+m[2]+'">'+m[1]+'</div><div class="sub">'+m[3]+'</div></div>').join('');
 
   pintarSolar();
+  try { pintarPrediccion(); } catch (e) { console.warn(e); $('cardPred').hidden = true; $('cardCredito').hidden = true; }
 
   $('lista').innerHTML = todos.slice().reverse().map(x => {
     const b = x.balance || (x.inyeccion - x.consumo);
@@ -360,6 +372,103 @@ function dibujarProd(datos){
         y: { stacked: true, ticks: { font: { size: 10 }, callback: v => num(v) }, grid: { color: c.linea }, border: { display: false } }
       } }
   });
+}
+
+// ---------- Predicción: próxima boleta y hasta cuándo alcanza el crédito ----------
+// La cuenta de Enel: monto ≈ máx(cargo mínimo, compra × precio compra + cargo fijo − (saldo + inyección × precio inyección)).
+// Todo se estima con tus boletas (precios, compra diaria) y la producción de los paneles del ciclo en curso.
+const DIA = 86400000;
+const aFecha = f => new Date(f + 'T12:00:00');
+const mesCorto = d => ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][d.getMonth()] + '-' + String(d.getFullYear()).slice(2);
+const prom = a => a.reduce((s, x) => s + x, 0) / (a.length || 1);
+
+function modeloBoletas(){
+  const b = todos.filter(x => x.fecha && x.consumo > 0);
+  if (b.length < 3) return null;
+  const u = b[b.length - 1];
+  const ult12 = b.slice(-12);
+  const fijo = Math.min(...ult12.map(x => x.monto).filter(m => m > 0));
+  const conPrecio = b.slice(-3).filter(x => x.consumo > 0);
+  const pCompra = prom(conPrecio.map(x => ((x.credito_aplicado || 0) + (x.monto || 0) - fijo) / x.consumo));
+  const pIny = u.inyeccion ? (u.credito_generado || 0) / u.inyeccion : 0;
+  const largo = Math.round(prom(b.slice(-6).filter(x => x.dias_ciclo).map(x => x.dias_ciclo)) || 30);
+  // Boleta de referencia: la del mismo ciclo un año antes (±20 días).
+  const haceUnAnio = fecha => {
+    const obj = aFecha(fecha).getTime() - 365 * DIA;
+    let mejor = null, dist = 20 * DIA;
+    b.forEach(x => { const d = Math.abs(aFecha(x.fecha).getTime() - obj); if (d < dist) { dist = d; mejor = x; } });
+    return mejor;
+  };
+  return { b, u, fijo, pCompra, pIny, largo, haceUnAnio };
+}
+
+function estimarCiclo(m, refs, prodTotal, saldoIni){
+  const ok = refs.filter(Boolean);
+  const compraDia = ok.map(x => x.consumo / (x.dias_ciclo || 30));
+  const ratioIny = ok.filter(x => x.prod_kwh).map(x => Math.min(1, x.inyeccion / x.prod_kwh));
+  const cBajo = Math.min(...compraDia) * m.largo, cAlto = Math.max(...compraDia) * m.largo;
+  const rBajo = ratioIny.length ? Math.min(...ratioIny) : .6, rAlto = ratioIny.length ? Math.max(...ratioIny) : .6;
+  const cuenta = (compra, iny) => {
+    const costo = compra * m.pCompra, cred = saldoIni + iny * m.pIny;
+    return { monto: Math.max(m.fijo, costo + m.fijo - cred), saldo: Math.max(0, cred - costo) };
+  };
+  const mejor = cuenta(cBajo, prodTotal * rAlto), peor = cuenta(cAlto, prodTotal * rBajo);
+  const medio = cuenta((cBajo + cAlto) / 2, prodTotal * (rBajo + rAlto) / 2);
+  return { mejor, peor, medio };
+}
+
+function pintarPrediccion(){
+  const cardP = $('cardPred'), cardC = $('cardCredito');
+  const m = modeloBoletas();
+  const ca = cicloActual;
+  if (!m || !ca || !m.u.fecha) { cardP.hidden = true; cardC.hidden = true; return; }
+  const cierre = new Date(aFecha(m.u.fecha).getTime() + m.largo * DIA);
+  const reseteo = cierre.getMonth() === 7; // la boleta de agosto borra el saldo anterior
+  const saldoIni = reseteo ? 0 : (m.u.saldo_credito || 0);
+  const dias = Math.min(ca.dias_ciclo, m.largo), resto = Math.max(0, m.largo - dias);
+  const prodDia = ca.dias_prod ? ca.prod_kwh / ca.dias_prod : (m.u.prod_kwh || 0) / (m.u.dias_ciclo || 30);
+  const prodTotal = ca.prod_kwh + prodDia * resto;
+  const refs = [m.u, m.haceUnAnio(cierre.toISOString().slice(0, 10))];
+  const e = estimarCiclo(m, refs, prodTotal, saldoIni);
+  const fmtD = d => d.toLocaleDateString('es-CL', { day: 'numeric', month: 'short' });
+  const igual = Math.abs(e.peor.monto - e.mejor.monto) < 1000;
+  cardP.hidden = false;
+  cardP.innerHTML = '<h2>Próxima boleta</h2>' +
+    '<div class="sub">Cierra cerca del ' + fmtD(cierre) + ' · vas en el día ' + dias + ' de ' + m.largo + '</div>' +
+    '<div class="big ' + (e.medio.monto <= m.fijo + 1 ? 'verde' : 'ambar') + '">' + clp(e.medio.monto) + '</div>' +
+    '<div class="rango">' + (igual ? (e.medio.monto <= m.fijo + 1 ? 'Solo el cargo mínimo: el crédito cubre la energía.' : 'Rango estrecho.')
+      : 'Rango probable: ' + clp(e.mejor.monto) + ' a ' + clp(e.peor.monto)) + '</div>' +
+    '<div class="nota">Crédito que quedaría al cierre: <b>' + clp(e.medio.saldo) + '</b>' +
+    (reseteo ? '. Ojo: es la boleta de agosto, el saldo anterior se borra.' : '') +
+    '. Estimado con ' + num(ca.prod_kwh) + ' kWh producidos en este ciclo, tus precios de la última boleta (' +
+    clp(m.pCompra) + ' por kWh comprado, ' + clp(m.pIny) + ' por kWh inyectado) y lo que compraste a la red en ciclos parecidos.</div>';
+
+  // Proyección del crédito: 6 boletas hacia adelante, cada una parecida a la del año anterior.
+  const filas = [];
+  let saldo = e.medio.saldo, fecha = cierre, seAcaba = null, perdido = 0;
+  for (let k = 1; k <= 6; k++) {
+    fecha = new Date(fecha.getTime() + m.largo * DIA);
+    const ref = m.haceUnAnio(fecha.toISOString().slice(0, 10));
+    if (!ref || !ref.prod_kwh) break;
+    if (fecha.getMonth() === 7 && saldo > 0) { perdido = saldo; saldo = 0; }
+    const cred = saldo + ref.inyeccion * m.pIny, costo = ref.consumo * m.pCompra;
+    saldo = Math.max(0, cred - costo);
+    const paga = Math.max(m.fijo, costo + m.fijo - cred);
+    if (!seAcaba && paga > m.fijo + 1000) seAcaba = { fecha, paga };
+    filas.push({ mes: mesCorto(fecha), saldo, paga });
+  }
+  if (!filas.length) { cardC.hidden = true; return; }
+  const maxS = Math.max(...filas.map(f => f.saldo), e.medio.saldo, 1);
+  cardC.hidden = false;
+  cardC.innerHTML = '<h2>¿Hasta cuándo alcanza el crédito?</h2>' +
+    '<div class="sub">' + (seAcaba
+      ? 'Si consumes como el año pasado, el crédito se acaba cerca de la boleta de <b>' + mesCorto(seAcaba.fecha) + '</b> y esa boleta saldría unos ' + clp(seAcaba.paga) + '.'
+      : 'Si consumes como el año pasado, el crédito alcanza al menos hasta ' + filas[filas.length - 1].mes + '.') + '</div>' +
+    '<div class="meses">' + filas.map(f => '<div><div class="col"><i class="' + (f.saldo > 0 ? '' : 'cero') + '" style="height:' +
+      Math.max(4, Math.round(f.saldo / maxS * 100)) + '%"></i></div>' + f.mes + '<br>' + (f.saldo > 0 ? clp(f.saldo / 1000).replace('$', '$') + 'k' : clp(f.paga)) + '</div>').join('') + '</div>' +
+    '<div class="nota">Verde: crédito que quedaría después de cada boleta. Rojo: boletas en que pagarías. ' +
+    (perdido ? 'En agosto se borrarían unos ' + clp(perdido) + ' de saldo. ' : '') +
+    'Cargar el auto de día alarga el crédito: cada kWh usado directo del sol vale el doble que uno inyectado.</div>';
 }
 
 function colores(){
