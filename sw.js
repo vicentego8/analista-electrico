@@ -1,6 +1,6 @@
 // Service worker: guarda la "cáscara" de la app para que abra al instante,
 // incluso sin internet. Los datos se piden siempre frescos a Google.
-const VERSION = 'solar-v1';
+const VERSION = 'solar-v2';
 const CASCARA = [
   './',
   './index.html',

@@ -75,6 +75,17 @@
   .chart { position: relative; height: 230px; }
   .chart.bajo { height: 180px; }
 
+  .vivo { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .vivo .big { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ambar); }
+  .punto { width: 8px; height: 8px; border-radius: 50%; background: var(--ambar); display: inline-block; animation: latido 2s ease-in-out infinite; }
+  @keyframes latido { 50% { opacity: .3; } }
+  .trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+  .trio div { background: var(--bg); border-radius: 10px; padding: 9px 10px; min-width: 0; }
+  .trio .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--tenue); }
+  .trio .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .trio .v small { font-size: 11px; font-weight: 500; color: var(--tenue); }
+  .nota { font-size: 11.5px; color: var(--tenue); margin-top: 10px; }
+
   .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
   .tab { flex: 1; font: inherit; font-size: 13px; padding: 8px; border-radius: 10px; border: 1px solid var(--linea);
          background: var(--panel); color: var(--tenue); cursor: pointer; }
@@ -129,6 +140,7 @@
 
   <div id="contenido" hidden>
     <div class="hero" id="hero"></div>
+    <div class="card" id="solar" hidden></div>
     <div class="grid" id="metricas"></div>
 
     <div class="tabs" role="tablist">
@@ -141,6 +153,15 @@
       <div class="sub">kWh por mes</div>
       <div class="leyenda"><span><i style="background:#F0997B"></i>Consumo red</span><span><i style="background:#5DCAA5"></i>Inyección solar</span></div>
       <div class="chart"><canvas id="cBarras"></canvas></div>
+    </div>
+
+    <div class="card" id="cardProd" hidden>
+      <h2>Producción vs boleta</h2>
+      <div class="sub">kWh por mes. Lo que produjeron los paneles (FusionSolar) al lado de lo que dice Enel.</div>
+      <div class="leyenda"><span><i style="background:#EF9F27"></i>Producción paneles</span><span><i style="background:#5DCAA5"></i>Inyección (Enel)</span><span><i style="background:#F0997B"></i>Consumo red (Enel)</span></div>
+      <div class="chart"><canvas id="cProd"></canvas></div>
+      <div class="lista" id="listaProd" style="margin-top:8px"></div>
+      <div class="nota">Autoconsumo = producción − inyección: lo que tu casa usó directo de los paneles. La boleta Enel no corta justo el día 1, así que la comparación por mes es aproximada.</div>
     </div>
 
     <div class="card">
@@ -164,7 +185,8 @@ const LS_ENLACE = 'solar.enlace', LS_DATOS = 'solar.datos';
 const $ = id => document.getElementById(id);
 const clp = n => '$' + Math.round(n || 0).toLocaleString('es-CL');
 const num = n => Math.round(n || 0).toLocaleString('es-CL');
-let todos = [], rango = 12, charts = {};
+let todos = [], rango = 12, charts = {}, solar = null, produccion = [];
+const kwh = (n, d) => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('es-CL', { maximumFractionDigits: d === undefined ? 1 : d });
 
 function leer(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
 function guardar(k, v){ try { localStorage.setItem(k, v); } catch(e){} }
@@ -210,10 +232,12 @@ async function cargar(){
 
 function pintar(d, desdeCache){
   todos = (d.datos || []).filter(x => x && x.mes);
+  solar = d.solar || null;
+  produccion = (d.produccion || []).filter(x => x && x.mes);
   if (!todos.length) { mostrar('cargando'); $('cargando').innerHTML = '<div>☀️</div><div>Aún no hay boletas procesadas.</div>'; return; }
   const cuando = d.actualizado ? new Date(d.actualizado).toLocaleString('es-CL', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
   $('sub').textContent = todos.length + ' boletas · ' + (desdeCache ? 'guardado ' : 'al día ') + cuando;
-  $('pie').textContent = 'Se actualiza solo cada mañana, cuando llega tu boleta Enel.';
+  $('pie').textContent = 'Boletas: se actualizan solas cada mañana. Paneles: cada vez que abres la app.';
   mostrar('contenido');
   renderizar();
 }
@@ -244,6 +268,8 @@ function renderizar(){
     ['Total pagado', clp(tPag), '', per]
   ].map(m => '<div class="m"><div class="lbl">'+m[0]+'</div><div class="v '+m[2]+'">'+m[1]+'</div><div class="sub">'+m[3]+'</div></div>').join('');
 
+  pintarSolar();
+
   $('lista').innerHTML = todos.slice().reverse().map(x => {
     const b = x.balance || (x.inyeccion - x.consumo);
     return '<div class="fila"><div class="mes">' + x.mes + '</div>' +
@@ -254,6 +280,64 @@ function renderizar(){
   }).join('');
 
   dibujar(datos);
+  dibujarProd();
+}
+
+function pintarSolar(){
+  const c = $('solar');
+  if (!solar || (!solar.ok && /Falta el enlace/.test(solar.error || ''))) { c.hidden = true; return; }
+  c.hidden = false;
+  if (!solar.ok) {
+    c.innerHTML = '<h2>Tus paneles</h2><div class="nota rojo">No pude leer FusionSolar: ' + solar.error + '</div>';
+    return;
+  }
+  const hora = solar.leido ? new Date(solar.leido).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+  c.innerHTML =
+    '<h2>Tus paneles ahora</h2>' +
+    '<div class="vivo"><span class="punto"></span><span class="big">' + kwh(solar.ahora_kw, 2) + ' kW</span>' +
+    '<span class="sub" style="margin:0">' + ((solar.ahora_kw || 0) > 0 ? 'produciendo' : 'sin sol en este momento') + '</span></div>' +
+    '<div class="trio">' +
+      '<div><div class="lbl">Hoy</div><div class="v">' + kwh(solar.hoy_kwh) + ' <small>kWh</small></div></div>' +
+      '<div><div class="lbl">Este mes</div><div class="v">' + kwh(solar.mes_kwh, 0) + ' <small>kWh</small></div></div>' +
+      '<div><div class="lbl">Este año</div><div class="v">' + kwh(solar.anio_kwh, 0) + ' <small>kWh</small></div></div>' +
+    '</div>' +
+    '<div class="nota">Dato de FusionSolar leído a las ' + hora + '. Huawei lo actualiza cada ~30 min.</div>';
+}
+
+function dibujarProd(){
+  const card = $('cardProd');
+  const filas = produccion.map(p => {
+    const b = todos.find(x => x.mes === p.mes) || null;
+    return { mes: p.mes, prod: p.kwh, dias: p.dias, iny: b ? b.inyeccion : null, cons: b ? b.consumo : null };
+  });
+  if (!filas.length) { card.hidden = true; return; }
+  card.hidden = false;
+
+  $('listaProd').innerHTML = filas.slice().reverse().map(f => {
+    const auto = f.iny !== null ? f.prod - f.iny : null;
+    return '<div class="fila"><div class="mes">' + f.mes + '</div>' +
+      '<div class="det">☀️ ' + num(f.prod) + ' kWh producidos' + (f.dias < 28 ? ' <small>(' + f.dias + ' días anotados)</small>' : '') + '<br>' +
+      (f.iny !== null ? '↑ ' + num(f.iny) + ' inyectados · ↓ ' + num(f.cons) + ' de la red' : 'sin boleta de este mes todavía') + '</div>' +
+      '<div class="monto">' + (auto !== null ? num(auto) + ' kWh<small class="tenue">autoconsumo</small>' : '') + '</div></div>';
+  }).join('');
+
+  if (typeof Chart === 'undefined') return;
+  const c = colores();
+  if (charts.p) charts.p.destroy();
+  charts.p = new Chart($('cProd'), {
+    type: 'bar',
+    data: { labels: filas.map(f => f.mes), datasets: [
+      { label: 'Producción', data: filas.map(f => f.prod), backgroundColor: '#EF9F27', borderRadius: 4, barPercentage: .75, categoryPercentage: .75 },
+      { label: 'Inyección', data: filas.map(f => f.iny), backgroundColor: '#5DCAA5', borderRadius: 4, barPercentage: .75, categoryPercentage: .75 },
+      { label: 'Consumo red', data: filas.map(f => f.cons), backgroundColor: '#F0997B', borderRadius: 4, barPercentage: .75, categoryPercentage: .75 }
+    ]},
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false },
+      tooltip: { callbacks: { label: t => t.dataset.label + ': ' + num(t.raw) + ' kWh' } } },
+      scales: {
+        x: { ticks: { font: { size: 10 }, maxRotation: 0 }, grid: { display: false } },
+        y: { ticks: { font: { size: 10 }, callback: v => num(v) }, grid: { color: c.linea }, border: { display: false } }
+      } }
+  });
 }
 
 function colores(){
@@ -308,6 +392,8 @@ $('btn-guardar').addEventListener('click', () => {
 });
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (todos.length) renderizar(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && leer(LS_ENLACE)) cargar(); });
+// Con la app abierta, refresca la producción cada 5 minutos.
+setInterval(() => { if (document.visibilityState === 'visible' && leer(LS_ENLACE) && todos.length) cargar(); }, 5 * 60 * 1000);
 
 // Arranque: muestra al instante lo último guardado y luego pide datos frescos.
 (function iniciar(){
