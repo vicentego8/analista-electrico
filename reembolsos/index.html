@@ -253,6 +253,7 @@
       datos = j.estado;
       try { localStorage.setItem('reembolsos-cache', JSON.stringify(j)); } catch (e) {}
       pintar(j.actualizado);
+      restaurarHoja();
     } catch (e) {
       let c = null; try { c = JSON.parse(localStorage.getItem('reembolsos-cache') || 'null'); } catch (x) {}
       if (c && c.estado) { datos = c.estado; pintar(c.actualizado); if (!silencioso) aviso('Sin conexión: muestro lo último guardado.', 'error'); }
@@ -349,7 +350,18 @@
     $('hoja').innerHTML = '<div class="asa"></div>' + html; $('hoja').hidden = false; $('velo').hidden = false;
     $('hoja').scrollTop = 0; document.body.style.overflow = 'hidden';
   }
-  function cerrarHoja() { $('hoja').hidden = true; $('velo').hidden = true; document.body.style.overflow = ''; }
+  function cerrarHoja() {
+    $('hoja').hidden = true; $('velo').hidden = true; document.body.style.overflow = '';
+    try { localStorage.removeItem('reembolsos-hoja'); } catch (e) {}
+  }
+  // Si el iPhone cerró la app mientras declarabas en MetLife, al volver se reabre la misma boleta.
+  let hojaRestaurada = false;
+  function restaurarHoja() {
+    if (hojaRestaurada || !datos) return; hojaRestaurada = true;
+    let id = null; try { id = localStorage.getItem('reembolsos-hoja'); } catch (e) {}
+    const b = id && datos.boletas.find(x => x.id === id);
+    if (b && $('hoja').hidden) hojaBoleta(id);
+  }
   $('velo').addEventListener('click', cerrarHoja);
   const cab = t => '<div class="cab"><h2>' + esc(t) + '</h2><button class="cerrar" data-cerrar="1" aria-label="Cerrar">✕</button></div>';
 
@@ -362,6 +374,7 @@
 
   function hojaBoleta(id) {
     const b = datos.boletas.find(x => x.id === id); if (!b) return;
+    try { localStorage.setItem('reembolsos-hoja', id); } catch (e) {}
     const enCola = datos.cola.some(c => c.id === b.id && c.estado === 'Pendiente');
     const datosB = [['Para', b.beneficiario], ['N° boleta', b.numero], ['Fecha', b.fecha], ['Monto boleta', b.monto ? pesos(b.monto) : '—'],
                     ['Saldo para MetLife', b.saldo ? pesos(b.saldo) : '—'], ['Pagado por MetLife', b.aprobado ? pesos(b.aprobado) : '—'], ['Estado', b.etapa]];
@@ -375,6 +388,14 @@
     abrirHoja(cab(b.prestador) + '<div class="intro">' + esc(b.id) + '</div>' +
       (b.nota ? '<div class="nota"><b>Nota</b>' + esc(b.nota) + '</div>' : '') +
       '<div class="form">' + datosB.map(d => '<div class="dato"><span>' + d[0] + '</span><span class="num">' + esc(d[1]) + '</span></div>').join('') + '</div>' + boton);
+  }
+
+  // En la app instalada del iPhone, un enlace normal se abre en un navegador interno que se
+  // cierra al volver a la app. googlechromes:// lo abre en la app Chrome (si está instalada).
+  function fuera(url) {
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    const instalada = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+    return ios && instalada ? url.replace(/^https:/, 'googlechromes:') : url;
   }
 
   // MetLife no deja entrar robots: la app te deja todo listo para declararla en 1 minuto.
@@ -391,8 +412,9 @@
       '<div class="kit-t">2. Documentos: elígelos en Drive › Para MetLife</div>' +
       '<div class="form">' + archivos.map((a, i) =>
         '<div class="dato"><span>' + (i ? 'Bono o Reembolso' : 'Boleta o Factura') + '</span><span>' + esc(a) + '</span></div>').join('') + '</div>' +
-      '<a class="btn" href="https://portaldeclientes.metlife.cl/PIP/new-home" target="_blank" rel="noopener">Abrir MetLife</a>' +
-      (carpeta ? '<a class="btn sec" href="' + esc(carpeta) + '" target="_blank" rel="noopener">Ver carpeta Para MetLife</a>' : '') +
+      '<a class="btn" href="' + esc(fuera('https://portaldeclientes.metlife.cl/PIP/new-home')) + '" target="_blank" rel="noopener">Abrir MetLife en Chrome</a>' +
+      (carpeta ? '<a class="btn sec" href="' + esc(fuera(carpeta)) + '" target="_blank" rel="noopener">Ver carpeta Para MetLife</a>' : '') +
+      '<div class="intro" style="margin-top:12px">MetLife se abre aparte, en Chrome. Para volver a copiar un dato, cambia a esta app (desliza desde abajo) y vuelve a Chrome: no pierdes lo que llevas.</div>' +
       '<div class="intro" style="margin-top:12px">Cuando MetLife te mande el correo "Recibimos tu solicitud", la app la marca sola y borra las copias.</div>';
   }
 
