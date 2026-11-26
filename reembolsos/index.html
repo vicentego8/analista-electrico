@@ -402,20 +402,21 @@
   function kitMetlife(b, kit) {
     const r = kit.resultado || '';
     const carpeta = (r.match(/https:\/\/drive\.google\.com\/\S+/) || [''])[0].replace(/[.)]+$/, '');
-    const archivos = [b.beneficiario + ' - boleta ' + b.numero + '.pdf', b.beneficiario + ' - liquidacion Esencial ' + b.numero + '.pdf'];
+    const base = (r.split(' · ')[1] || '').trim();
+    const archivos = base ? [base + '.pdf', base + '_liq.pdf'] : ['Boleta N° ' + b.numero, 'Liquidación de Esencial (termina en _liq)'];
     const monto = String(Math.round(Number(b.saldo) || 0));
     const campos = [['Tipo', 'Consultas médicas, exámenes y procedimientos'], ['Beneficiario', b.beneficiario],
                     ['Previsión', 'Isapre Esencial'], ['Monto', monto]];
     return '<div class="kit-t">1. En MetLife: Reembolsos › Vida + Complementario › Solicitar</div>' +
       '<div class="form">' + campos.map(c => '<div class="dato copia"><span>' + c[0] + '</span><span>' + esc(c[0] === 'Monto' ? pesos(c[1]) : c[1]) +
         '</span><button class="copiar" data-copiar="' + esc(c[1]) + '">Copiar</button></div>').join('') + '</div>' +
-      '<div class="kit-t">2. Documentos: elígelos en Drive › Para MetLife</div>' +
+      '<div class="kit-t">2. Documentos: elígelos en Drive › PSI › ' + esc(b.prestador) + '</div>' +
       '<div class="form">' + archivos.map((a, i) =>
         '<div class="dato"><span>' + (i ? 'Bono o Reembolso' : 'Boleta o Factura') + '</span><span>' + esc(a) + '</span></div>').join('') + '</div>' +
       '<a class="btn" href="' + esc(fuera('https://portaldeclientes.metlife.cl/PIP/new-home')) + '" target="_blank" rel="noopener">Abrir MetLife en Chrome</a>' +
-      (carpeta ? '<a class="btn sec" href="' + esc(fuera(carpeta)) + '" target="_blank" rel="noopener">Ver carpeta Para MetLife</a>' : '') +
+      (carpeta ? '<a class="btn sec" href="' + esc(fuera(carpeta)) + '" target="_blank" rel="noopener">Ver carpeta de ' + esc(b.prestador) + '</a>' : '') +
       '<div class="intro" style="margin-top:12px">MetLife se abre aparte, en Chrome. Para volver a copiar un dato, cambia a esta app (desliza desde abajo) y vuelve a Chrome: no pierdes lo que llevas.</div>' +
-      '<div class="intro" style="margin-top:12px">Cuando MetLife te mande el correo "Recibimos tu solicitud", la app la marca sola y borra las copias.</div>';
+      '<div class="intro" style="margin-top:12px">Cuando MetLife te mande el correo "Recibimos tu solicitud", la app la marca sola.</div>';
   }
 
   function hojaSubir() {
