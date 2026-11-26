@@ -1,6 +1,6 @@
 // Guarda la "cáscara" de la app para que abra al instante.
 // Los datos se piden siempre frescos a Google y no se guardan aquí.
-const VERSION = 'reembolsos-v6';
+const VERSION = 'reembolsos-v7';
 const CASCARA = ['./', './index.html', './manifest.json', './icons/apple-touch-icon.png', './icons/icon-192.png', './icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(CASCARA)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
