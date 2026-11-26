@@ -187,7 +187,7 @@
     </button>
     <div class="stats">
       <button class="stat" data-m="toca" id="st-toca"><div class="v num" id="s-toca">0</div><div class="lbl">Te toca</div></button>
-      <button class="stat" data-m="esencial"><div class="v num" id="s-es">0</div><div class="lbl">En Esencial</div></button>
+      <button class="stat" data-m="pendiente"><div class="v num" id="s-pend">0</div><div class="lbl">Pendientes</div></button>
       <button class="stat" data-m="cobrado"><div class="v num" id="s-cob">$0</div><div class="lbl">Cobrado</div></button>
     </div>
 
@@ -296,6 +296,8 @@
     const porLlegar = B.filter(b => b.etapa === 'Esperando MetLife' || b.etapa === 'Lista para MetLife');
     const accion = B.filter(b => ENVIABLES.indexOf(b.etapa) >= 0 || b.etapa === 'Revisar');
     const enEsencial = B.filter(b => b.etapa === 'Esperando Esencial');
+    const enMetlife = B.filter(b => b.etapa === 'Esperando MetLife');
+    const pendientes = enEsencial.concat(enMetlife, accion);
     const terminadas = B.filter(b => b.etapa === 'Terminada');
     const rechazadas = B.filter(b => /Rechazada/.test(b.etapa));
     const cobrado = terminadas.reduce((s, b) => s + (b.aprobado || 0), 0);
@@ -303,13 +305,14 @@
     grupos = {
       llegar: { t: 'Por recibir de MetLife', s: 'Declaradas o listas para declarar. MetLife suele pagar el 50% del saldo, así que el monto es un estimado.', L: porLlegar, val: b => (b.saldo || 0) / 2 },
       toca: { t: 'Te toca', s: 'Trámites que necesitan que hagas algo.', L: accion, modo: 'toca' },
-      esencial: { t: 'En Esencial', s: 'Ingresadas a Esencial, esperando su respuesta. Se actualizan solas cuando llega el correo.', L: enEsencial },
+      pendiente: { t: 'Pendientes', s: 'Todo lo que aún no termina, según dónde está. Se actualiza solo cuando llegan los correos de Esencial y MetLife.', L: pendientes,
+        secciones: [['En Esencial', 'esperando su respuesta', enEsencial], ['En MetLife', 'declaradas, esperando el pago', enMetlife], ['Te toca a ti', 'necesitan que hagas algo', accion]] },
       cobrado: { t: 'Cobrado a MetLife', s: terminadas.length + ' terminadas' + (sinMonto ? ', ' + sinMonto + ' sin monto registrado' : '') + '.', L: terminadas, val: b => b.aprobado || 0 }
     };
     $('h-v').textContent = pesos(porLlegar.reduce((s, b) => s + (b.saldo || 0) / 2, 0));
     $('h-s').textContent = porLlegar.length + (porLlegar.length === 1 ? ' boleta' : ' boletas') + ' · estimado';
     $('s-toca').textContent = accion.length; $('st-toca').classList.toggle('alerta', accion.length > 0);
-    $('s-es').textContent = enEsencial.length;
+    $('s-pend').textContent = pendientes.length;
     $('s-cob').textContent = corto(cobrado);
 
     $('toca-n').textContent = accion.length ? accion.length : '';
@@ -367,6 +370,12 @@
 
   function hojaGrupo(k) {
     const g = grupos[k]; if (!g) return;
+    if (g.secciones) {
+      abrirHoja(cab(g.t) + '<div class="intro">' + esc(g.s) + '</div>' + g.secciones.map(sc =>
+        '<div class="seccion"><span>' + esc(sc[0]) + '</span><b>' + sc[2].length + ' · ' + esc(sc[1]) + '</b></div><div class="grupo">' +
+        (sc[2].length ? sc[2].map(b => fila(b, sc[0] === 'Te toca a ti' ? 'toca' : null)).join('') : '<div class="vacio">Nada aquí.</div>') + '</div>').join(''));
+      return;
+    }
     const total = g.val ? '<div class="total"><span>' + g.L.length + (g.L.length === 1 ? ' boleta' : ' boletas') + '</span><b class="num">' + pesos(g.L.reduce((s, b) => s + g.val(b), 0)) + '</b></div>' : '';
     abrirHoja(cab(g.t) + '<div class="intro">' + esc(g.s) + '</div><div class="grupo">' +
       (g.L.length ? g.L.map(b => fila(b, g.modo || g)).join('') : '<div class="vacio">Nada aquí.</div>') + '</div>' + total);
