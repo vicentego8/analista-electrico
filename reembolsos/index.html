@@ -141,6 +141,10 @@
   .dato + .dato { border-top: .5px solid var(--linea); }
   .dato span:first-child { color: var(--tenue); }
   .dato span:last-child { text-align: right; }
+  .dato.copia { align-items: center; }
+  .copiar { font-size: 13.5px; font-weight: 600; color: var(--acento); background: var(--acento-suave); padding: 5px 10px; border-radius: 9px; flex: none; }
+  .kit-t { font-size: 13px; color: var(--tenue); text-transform: uppercase; letter-spacing: .02em; margin: 16px 4px 6px; }
+  a.btn { display: block; text-align: center; text-decoration: none; }
   .nota { font-size: 14px; background: var(--panel); border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; color: var(--txt); }
   .nota b { display: block; font-size: 12px; color: var(--tenue); font-weight: 600; text-transform: uppercase; letter-spacing: .3px; margin-bottom: 3px; }
 
@@ -273,7 +277,7 @@
   const ENVIABLES = ['Por ingresar a Esencial', 'Rechazada Esencial', 'Lista para MetLife'];
   const QUE_HACER = {
     'Por ingresar a Esencial': 'Ingresar a Esencial', 'Rechazada Esencial': 'Reingresar a Esencial',
-    'Lista para MetLife': 'Declarar a MetLife', 'Revisar': 'Revisar datos'
+    'Lista para MetLife': 'Preparar para MetLife', 'Revisar': 'Revisar datos'
   };
 
   function fila(b, modo) {
@@ -362,11 +366,34 @@
     const datosB = [['Para', b.beneficiario], ['N° boleta', b.numero], ['Fecha', b.fecha], ['Monto boleta', b.monto ? pesos(b.monto) : '—'],
                     ['Saldo para MetLife', b.saldo ? pesos(b.saldo) : '—'], ['Pagado por MetLife', b.aprobado ? pesos(b.aprobado) : '—'], ['Estado', b.etapa]];
     let boton = '';
-    if (ENVIABLES.indexOf(b.etapa) >= 0) boton = enCola ? '<button class="btn" disabled>Ya está en la cola</button>'
+    if (ENVIABLES.indexOf(b.etapa) >= 0) boton = enCola ? '<button class="btn" disabled>' + (b.etapa === 'Lista para MetLife' ? 'Preparando los archivos… (hasta 5 min)' : 'Ya está en la cola') + '</button>'
       : '<button class="btn" data-enviar="' + esc(b.id) + '">' + esc(QUE_HACER[b.etapa]) + '</button>';
+    if (b.etapa === 'Lista para MetLife') {
+      const kit = datos.cola.filter(c => c.id === b.id && c.accion === 'Declarar a MetLife' && c.estado === 'Listo para ti').pop();
+      if (kit) boton = kitMetlife(b, kit);
+    }
     abrirHoja(cab(b.prestador) + '<div class="intro">' + esc(b.id) + '</div>' +
       (b.nota ? '<div class="nota"><b>Nota</b>' + esc(b.nota) + '</div>' : '') +
       '<div class="form">' + datosB.map(d => '<div class="dato"><span>' + d[0] + '</span><span class="num">' + esc(d[1]) + '</span></div>').join('') + '</div>' + boton);
+  }
+
+  // MetLife no deja entrar robots: la app te deja todo listo para declararla en 1 minuto.
+  function kitMetlife(b, kit) {
+    const r = kit.resultado || '';
+    const carpeta = (r.match(/https:\/\/drive\.google\.com\/\S+/) || [''])[0].replace(/[.)]+$/, '');
+    const archivos = [b.beneficiario + ' - boleta ' + b.numero + '.pdf', b.beneficiario + ' - liquidacion Esencial ' + b.numero + '.pdf'];
+    const monto = String(Math.round(Number(b.saldo) || 0));
+    const campos = [['Tipo', 'Consultas médicas, exámenes y procedimientos'], ['Beneficiario', b.beneficiario],
+                    ['Previsión', 'Isapre Esencial'], ['Monto', monto]];
+    return '<div class="kit-t">1. En MetLife: Reembolsos › Vida + Complementario › Solicitar</div>' +
+      '<div class="form">' + campos.map(c => '<div class="dato copia"><span>' + c[0] + '</span><span>' + esc(c[0] === 'Monto' ? pesos(c[1]) : c[1]) +
+        '</span><button class="copiar" data-copiar="' + esc(c[1]) + '">Copiar</button></div>').join('') + '</div>' +
+      '<div class="kit-t">2. Documentos: elígelos en Drive › Para MetLife</div>' +
+      '<div class="form">' + archivos.map((a, i) =>
+        '<div class="dato"><span>' + (i ? 'Bono o Reembolso' : 'Boleta o Factura') + '</span><span>' + esc(a) + '</span></div>').join('') + '</div>' +
+      '<a class="btn" href="https://portaldeclientes.metlife.cl/PIP/new-home" target="_blank" rel="noopener">Abrir MetLife</a>' +
+      (carpeta ? '<a class="btn sec" href="' + esc(carpeta) + '" target="_blank" rel="noopener">Ver carpeta Para MetLife</a>' : '') +
+      '<div class="intro" style="margin-top:12px">Cuando MetLife te mande el correo "Recibimos tu solicitud", la app la marca sola y borra las copias.</div>';
   }
 
   function hojaSubir() {
@@ -426,6 +453,12 @@
 
   document.addEventListener('click', async ev => {
     const t = ev.target;
+    const cp = t.closest && t.closest('[data-copiar]');
+    if (cp) {
+      try { await navigator.clipboard.writeText(cp.dataset.copiar); cp.textContent = 'Copiado'; setTimeout(() => { cp.textContent = 'Copiar'; }, 1500); }
+      catch (x) { aviso('No pude copiar. Mantén presionado el texto para copiarlo.', 'error'); }
+      return;
+    }
     if (t.closest('[data-cerrar]')) { cerrarHoja(); return; }
     const m = t.closest('[data-m]'); if (m) { hojaGrupo(m.dataset.m); return; }
     const bo = t.closest('[data-b]'); if (bo) { hojaBoleta(bo.dataset.b); return; }
