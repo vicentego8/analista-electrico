@@ -143,6 +143,12 @@
   .dato span:last-child { text-align: right; }
   .dato.copia { align-items: center; }
   .copiar { font-size: 13.5px; font-weight: 600; color: var(--acento); background: var(--acento-suave); padding: 5px 10px; border-radius: 9px; flex: none; }
+  .chip { display: inline-block; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; background: var(--panel2); color: var(--tenue); }
+  .chip.azul { background: var(--acento-suave); color: var(--acento); }
+  .chip.ambar { background: rgba(194,122,18,.15); color: var(--ambar); }
+  .chip.verde { background: rgba(31,157,107,.14); color: var(--verde); }
+  .chip.rojo { background: rgba(201,66,63,.14); color: var(--rojo); }
+  .hoja .grupo { margin-bottom: 14px; box-shadow: none; }
   .kit-t { font-size: 13px; color: var(--tenue); text-transform: uppercase; letter-spacing: .02em; margin: 16px 4px 6px; }
   a.btn { display: block; text-align: center; text-decoration: none; }
   .nota { font-size: 14px; background: var(--panel); border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; color: var(--txt); }
@@ -228,7 +234,7 @@
   const corto = n => n >= 1e6 ? '$' + (n / 1e6).toLocaleString('es-CL', { maximumFractionDigits: 1 }) + 'M' : n >= 1e4 ? '$' + Math.round(n / 1e3) + 'k' : pesos(n);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const CHEV = '<span class="chev"><svg viewBox="0 0 8 13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m1.5 1.5 5 5-5 5"/></svg></span>';
-  let datos = null, filtro = 'Activas', grupos = {}, verTodas = false, sondeo = null;
+  let datos = null, filtro = 'Activas', grupos = {}, verTodas = false, sondeo = null, buscaba = false;
 
   function enlace() { try { return localStorage.getItem(CLAVE) || ''; } catch (e) { return ''; } }
   function partes() { const u = new URL(enlace()); const k = u.searchParams.get('k') || ''; u.search = ''; return { base: u.toString(), k: k }; }
@@ -254,6 +260,8 @@
       try { localStorage.setItem('reembolsos-cache', JSON.stringify(j)); } catch (e) {}
       pintar(j.actualizado);
       restaurarHoja();
+      const ab = !$('hoja').hidden && $('hoja').dataset.boleta;
+      if (ab && !($('folio') && $('folio').value)) hojaBoleta(ab);
     } catch (e) {
       let c = null; try { c = JSON.parse(localStorage.getItem('reembolsos-cache') || 'null'); } catch (x) {}
       if (c && c.estado) { datos = c.estado; pintar(c.actualizado); if (!silencioso) aviso('Sin conexión: muestro lo último guardado.', 'error'); }
@@ -281,9 +289,50 @@
     'Lista para MetLife': 'Preparar para MetLife', 'Revisar': 'Revisar datos'
   };
 
+  // ---------- Seguimiento: el estado de cada pedido, en palabras simples ----------
+  const EST = {
+    'Pendiente': ['azul', 'En espera'], 'Nuevo': ['azul', 'En espera'],
+    'Te toca a ti': ['ambar', 'Te toca'], 'Listo para ti': ['ambar', 'Te toca'],
+    'Hecho': ['verde', 'Listo'], 'Archivado': ['verde', 'Guardado'], 'Registrado': ['verde', 'Guardado'],
+    'Error': ['rojo', 'Error'], 'Ignorado': ['', 'Descartado'], 'Duplicado': ['', 'Repetido']
+  };
+  const est = e => EST[e] || ['verde', e || '—'];
+  const chip = e => '<span class="chip ' + est(e)[0] + '">' + esc(est(e)[1]) + '</span>';
+  const TIPOS = { boleta: 'Boleta', orden: 'Orden médica', informe: 'Informe médico' };
+  function detalleSubida(s) {
+    const t = (String(s.detalle || '').match(/tipo=(\w+)/) || [])[1];
+    if (s.estado === 'Nuevo') return (TIPOS[t] || 'Documento') + ' recibido. Se lee y se guarda en la carpeta del prestador en unos minutos.';
+    return s.detalle && !/^tipo=/.test(s.detalle) ? s.detalle : (TIPOS[t] || '');
+  }
+  const ACCION_TXT = {
+    'Ingresar a Esencial': 'Pediste ingresarla a Esencial', 'Declarar a MetLife': 'Pediste declararla a MetLife',
+    'Ya ingresé a Esencial': 'Anotaste que la ingresaste a Esencial', 'Buscar en correo': 'Revisaste el correo'
+  };
+  const accionTxt = a => ACCION_TXT[a] || a;
+  // Qué dice el seguimiento de cada pedido (el texto largo del sistema se reemplaza por algo corto).
+  function resultadoTxt(c) {
+    if (c.estado === 'Pendiente') return c.accion === 'Ya ingresé a Esencial' ? 'Se anota en unos minutos.' : 'El sistema lo atiende en unos minutos.';
+    if (c.estado === 'Te toca a ti' && c.accion === 'Ingresar a Esencial') return 'Esencial aún no se ingresa solo: lo haces tú (pasos abajo).';
+    if (c.estado === 'Listo para ti') return 'Archivos listos: decláralo tú (pasos abajo).';
+    return c.resultado || '';
+  }
+  // Pedidos de una boleta, del más nuevo al más antiguo.
+  const pedidos = id => datos.cola.filter(c => c.id === id).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  function queHacer(b) {
+    const u = pedidos(b.id)[0];
+    if (u && u.estado === 'Pendiente') return 'En espera';
+    if (u && u.accion === 'Ingresar a Esencial' && u.estado === 'Te toca a ti') return 'Ingrésala tú';
+    return QUE_HACER[b.etapa] || b.etapa;
+  }
+  const SIGUE = {
+    'Esperando Esencial': 'Esencial la está revisando (suele tardar unos 7 días hábiles). Cuando te responda por correo, la app lo anota sola.',
+    'Esperando MetLife': 'MetLife la está revisando (suele tardar unos 5 días hábiles).',
+    'Terminada': 'Terminada: no falta nada.', 'No declarable': 'No se puede declarar: no falta nada.'
+  };
+
   function fila(b, modo) {
     let der;
-    if (modo === 'toca') der = '<div class="m" style="color:var(--acento);font-size:14px">' + esc(QUE_HACER[b.etapa] || b.etapa) + '</div>';
+    if (modo === 'toca') der = '<div class="m" style="color:var(--acento);font-size:14px">' + esc(queHacer(b)) + '</div>';
     else if (modo && modo.val) der = '<div class="m num">' + pesos(modo.val(b)) + '</div><div class="e">' + esc(b.etapa) + '</div>';
     else der = '<div class="m num">' + (b.saldo ? pesos(b.saldo) : b.monto ? pesos(b.monto) : '') + '</div><div class="e">' + esc(b.etapa) + '</div>';
     return '<button class="fila" data-b="' + esc(b.id) + '"><span class="punto ' + (COLOR[b.etapa] || '') + '"></span>' +
@@ -323,18 +372,26 @@
     $('lista').innerHTML = L.length ? L.slice(0, tope).map(b => fila(b)).join('') +
       (L.length > tope ? '<button class="mas-btn" data-vertodas="1">Ver las ' + L.length + '</button>' : '') : '<div class="vacio">Sin boletas aquí.</div>';
 
-    const movs = datos.subidas.map(s => ({ f: s.fecha, t: 'Subiste ' + (s.origen === 'gmail' ? 'desde el correo' : 'un documento'), e: s.estado, d: s.detalle }))
-      .concat(datos.cola.map(c => ({ f: c.fecha, t: (c.accion === 'Buscar en correo' ? 'Revisaste el correo' : c.accion + (c.id ? ' ' + c.id : '')), e: c.estado, d: c.resultado })))
+    const nombreB = id => { const b = id && datos.boletas.find(x => x.id === id); return b ? b.prestador + ' ' + b.numero : ''; };
+    const movs = datos.subidas.map(s => ({ f: s.fecha, t: 'Subiste ' + (s.origen === 'gmail' ? 'desde el correo' : 'un documento'), e: s.estado, d: detalleSubida(s), id: s.id }))
+      .concat(datos.cola.map(c => ({ f: c.fecha, t: accionTxt(c.accion), e: c.estado, d: resultadoTxt(c), id: c.id })))
       .sort((a, b) => String(b.f).localeCompare(String(a.f))).slice(0, 6);
-    $('movs').innerHTML = movs.length ? movs.map(m => '<div class="fila"><span class="punto ' + (m.e === 'Pendiente' ? 'azul' : m.e === 'Error' ? 'rojo' : 'verde') + '"></span>' +
-      '<div class="c"><div class="q">' + esc(m.t) + '</div><div class="d" style="white-space:normal">' + esc(fecha(m.f)) + (m.d ? ' · ' + esc(m.d) : '') + '</div></div></div>').join('')
+    $('movs').innerHTML = movs.length ? movs.map(m => {
+      const n = nombreB(m.id);
+      const c = '<div class="c"><div class="q">' + esc(m.t) + '</div><div class="d" style="white-space:normal">' + esc(fecha(m.f)) +
+        (n ? ' · ' + esc(n) : '') + (m.d ? ' · ' + esc(m.d) : '') + '</div></div><div class="r">' + chip(m.e) + '</div>';
+      return n ? '<button class="fila" data-b="' + esc(m.id) + '">' + c + CHEV + '</button>' : '<div class="fila">' + c + '</div>';
+    }).join('')
       : '<div class="vacio">Todavía nada.</div>';
 
     const pend = datos.cola.some(c => c.accion === 'Buscar en correo' && c.estado === 'Pendiente');
+    const espera = datos.cola.some(c => c.estado === 'Pendiente') || datos.subidas.some(s => s.estado === 'Nuevo');
     $('buscando').hidden = !pend;
-    if (pend && !sondeo) sondeo = setInterval(() => cargar(true), 45000);
-    if (!pend && sondeo) {
-      clearInterval(sondeo); sondeo = null;
+    if (pend) buscaba = true;
+    if (espera && !sondeo) sondeo = setInterval(() => cargar(true), 45000);
+    if (!espera && sondeo) { clearInterval(sondeo); sondeo = null; }
+    if (!pend && buscaba) {
+      buscaba = false;
       const ult = datos.cola.filter(c => c.accion === 'Buscar en correo').sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)))[0];
       if (ult && ult.resultado) aviso(ult.resultado, 'ok');
     }
@@ -347,6 +404,7 @@
 
   // ---------- Hojas ----------
   function abrirHoja(html) {
+    $('hoja').dataset.boleta = '';
     $('hoja').innerHTML = '<div class="asa"></div>' + html; $('hoja').hidden = false; $('velo').hidden = false;
     $('hoja').scrollTop = 0; document.body.style.overflow = 'hidden';
   }
@@ -375,19 +433,47 @@
   function hojaBoleta(id) {
     const b = datos.boletas.find(x => x.id === id); if (!b) return;
     try { localStorage.setItem('reembolsos-hoja', id); } catch (e) {}
-    const enCola = datos.cola.some(c => c.id === b.id && c.estado === 'Pendiente');
+    const hist = pedidos(b.id), ult = hist[0];
+    const enCola = hist.some(c => c.estado === 'Pendiente');
     const datosB = [['Para', b.beneficiario], ['N° boleta', b.numero], ['Fecha', b.fecha], ['Monto boleta', b.monto ? pesos(b.monto) : '—'],
                     ['Saldo para MetLife', b.saldo ? pesos(b.saldo) : '—'], ['Pagado por MetLife', b.aprobado ? pesos(b.aprobado) : '—'], ['Estado', b.etapa]];
     let boton = '';
-    if (ENVIABLES.indexOf(b.etapa) >= 0) boton = enCola ? '<button class="btn" disabled>' + (b.etapa === 'Lista para MetLife' ? 'Preparando los archivos… (hasta 5 min)' : 'Ya está en la cola') + '</button>'
+    const esEsencial = b.etapa === 'Por ingresar a Esencial' || b.etapa === 'Rechazada Esencial';
+    if (ENVIABLES.indexOf(b.etapa) >= 0) boton = enCola ? '<button class="btn" disabled>' + (b.etapa === 'Lista para MetLife' ? 'Preparando los archivos… (hasta 5 min)' :
+        ult && ult.accion === 'Ya ingresé a Esencial' ? 'Anotando el N° de Esencial… (hasta 5 min)' : 'En espera: se atiende en hasta 5 min') + '</button>'
       : '<button class="btn" data-enviar="' + esc(b.id) + '">' + esc(QUE_HACER[b.etapa]) + '</button>';
+    if (esEsencial && !enCola && ult && ult.accion === 'Ingresar a Esencial' && ult.estado === 'Te toca a ti') boton = kitEsencial(b);
+    else if (SIGUE[b.etapa]) boton = '<div class="nota"><b>Qué sigue</b>' + esc(SIGUE[b.etapa]) + '</div>' + boton;
+    const seg = hist.length ? '<div class="kit-t">Seguimiento</div><div class="grupo">' + hist.slice(0, 5).map(c =>
+      '<div class="fila"><div class="c"><div class="q">' + esc(accionTxt(c.accion)) + '</div><div class="d" style="white-space:normal">' + esc(fecha(c.fecha)) +
+      (resultadoTxt(c) ? ' · ' + esc(resultadoTxt(c)) : '') + '</div></div><div class="r">' + chip(c.estado) + '</div></div>').join('') + '</div>' : '';
     if (b.etapa === 'Lista para MetLife') {
       const kit = datos.cola.filter(c => c.id === b.id && c.accion === 'Declarar a MetLife' && c.estado === 'Listo para ti').pop();
       if (kit) boton = kitMetlife(b, kit);
     }
     abrirHoja(cab(b.prestador) + '<div class="intro">' + esc(b.id) + '</div>' +
       (b.nota ? '<div class="nota"><b>Nota</b>' + esc(b.nota) + '</div>' : '') +
-      '<div class="form">' + datosB.map(d => '<div class="dato"><span>' + d[0] + '</span><span class="num">' + esc(d[1]) + '</span></div>').join('') + '</div>' + boton);
+      '<div class="form">' + datosB.map(d => '<div class="dato"><span>' + d[0] + '</span><span class="num">' + esc(d[1]) + '</span></div>').join('') + '</div>' + seg + boton);
+    $('hoja').dataset.boleta = id;
+  }
+
+  // Esencial todavía no se ingresa solo: la app te dice qué adjuntar y te deja anotar el N° que te dan,
+  // para que la respuesta de Esencial (que llega por correo) se reconozca sola.
+  function kitEsencial(b) {
+    const nota = b.nota || '';
+    const docs = ['Boleta N° ' + b.numero].concat(/informe/i.test(nota) ? ['Informe médico'] : []).concat(/orden/i.test(nota) ? ['Orden médica'] : []);
+    return '<div class="kit-t">Lo que falta: ingrésala tú en Esencial</div>' +
+      '<div class="form">' +
+        '<div class="dato"><span>1. Entra</span><span>Sucursal virtual › solicitar reembolso</span></div>' +
+        '<div class="dato"><span>2. Adjunta</span><span>' + docs.map(esc).join('<br>') + '</span></div>' +
+        '<div class="dato"><span>Dónde están</span><span>Drive › PSI › ' + esc(b.prestador) + '</span></div>' +
+        '<div class="dato"><span>3. Anota</span><span>El N° de solicitud que te da Esencial</span></div>' +
+      '</div>' +
+      '<a class="btn" href="' + esc(fuera('https://sucursalvirtual.somosesencial.cl/')) + '" target="_blank" rel="noopener">Abrir Esencial en Chrome</a>' +
+      '<div class="kit-t">¿Ya la ingresaste?</div>' +
+      '<div class="form"><label><input type="text" id="folio" inputmode="numeric" autocomplete="off" placeholder="N° de solicitud de Esencial"></label></div>' +
+      '<button class="btn sec" data-ingresado="' + esc(b.id) + '">Ya la ingresé</button>' +
+      '<div class="intro" style="margin-top:12px">Con ese número, la app reconoce sola la respuesta de Esencial cuando llegue a tu correo.</div>';
   }
 
   // En la app instalada del iPhone, un enlace normal se abre en un navegador interno que se
@@ -490,8 +576,19 @@
     const e = t.closest('[data-enviar]');
     if (e) {
       e.disabled = true; e.textContent = 'Enviando…';
-      try { const j = await post({ accion: 'enviar', id: e.dataset.enviar }); cerrarHoja(); aviso(j.mensaje, 'ok'); await cargar(); }
+      const id = e.dataset.enviar;
+      try { const j = await post({ accion: 'enviar', id }); aviso(j.mensaje, 'ok'); await cargar(true); hojaBoleta(id); }
       catch (x) { aviso(x.message, 'error'); e.disabled = false; }
+      return;
+    }
+    const ing = t.closest('[data-ingresado]');
+    if (ing) {
+      const folio = ($('folio') ? $('folio').value : '').replace(/\D/g, '');
+      if (folio.length < 6 || folio.length > 9) { aviso('Escribe el N° de solicitud que te dio Esencial (solo números).', 'error'); return; }
+      const id = ing.dataset.ingresado;
+      ing.disabled = true; ing.textContent = 'Anotando…';
+      try { const j = await post({ accion: 'ingresado', id, folio }); $('folio').value = ''; aviso(j.mensaje, 'ok'); await cargar(true); hojaBoleta(id); }
+      catch (x) { aviso('No se pudo anotar: ' + x.message, 'error'); ing.disabled = false; ing.textContent = 'Ya la ingresé'; }
     }
   });
 
