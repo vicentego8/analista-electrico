@@ -149,6 +149,8 @@
   .chip.verde { background: rgba(31,157,107,.14); color: var(--verde); }
   .chip.rojo { background: rgba(201,66,63,.14); color: var(--rojo); }
   .hoja .grupo { margin-bottom: 14px; box-shadow: none; }
+  .respaldo { margin-top: 14px; }
+  .respaldo summary { font-size: 14px; color: var(--acento); padding: 6px 4px 10px; cursor: pointer; }
   .kit-t { font-size: 13px; color: var(--tenue); text-transform: uppercase; letter-spacing: .02em; margin: 16px 4px 6px; }
   a.btn { display: block; text-align: center; text-decoration: none; }
   .nota { font-size: 14px; background: var(--panel); border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; color: var(--txt); }
@@ -457,8 +459,9 @@
     $('hoja').dataset.boleta = id;
   }
 
-  // Esencial todavía no se ingresa solo: la app te dice qué adjuntar y te deja anotar el N° que te dan,
-  // para que la respuesta de Esencial (que llega por correo) se reconozca sola.
+  // Esencial todavía no se ingresa solo: la app te dice qué adjuntar. Cuando Esencial manda el correo
+  // "Recibimos tu solicitud de reembolso", el sistema lo une solo a esta boleta (no tienes que avisar).
+  // El campo del N° queda escondido como respaldo, por si el correo no llega.
   function kitEsencial(b) {
     const nota = b.nota || '';
     const docs = ['Boleta N° ' + b.numero].concat(/informe/i.test(nota) ? ['Informe médico'] : []).concat(/orden/i.test(nota) ? ['Orden médica'] : []);
@@ -467,13 +470,14 @@
         '<div class="dato"><span>1. Entra</span><span>Sucursal virtual › solicitar reembolso</span></div>' +
         '<div class="dato"><span>2. Adjunta</span><span>' + docs.map(esc).join('<br>') + '</span></div>' +
         '<div class="dato"><span>Dónde están</span><span>Drive › PSI › ' + esc(b.prestador) + '</span></div>' +
-        '<div class="dato"><span>3. Anota</span><span>El N° de solicitud que te da Esencial</span></div>' +
+        '<div class="dato"><span>3. Listo</span><span>No tienes que avisar nada aquí</span></div>' +
       '</div>' +
       '<a class="btn" href="' + esc(fuera('https://sucursalvirtual.somosesencial.cl/')) + '" target="_blank" rel="noopener">Abrir Esencial en Chrome</a>' +
-      '<div class="kit-t">¿Ya la ingresaste?</div>' +
-      '<div class="form"><label><input type="text" id="folio" inputmode="numeric" autocomplete="off" placeholder="N° de solicitud de Esencial"></label></div>' +
-      '<button class="btn sec" data-ingresado="' + esc(b.id) + '">Ya la ingresé</button>' +
-      '<div class="intro" style="margin-top:12px">Con ese número, la app reconoce sola la respuesta de Esencial cuando llegue a tu correo.</div>';
+      '<div class="intro" style="margin-top:12px">Cuando Esencial te mande el correo "Recibimos tu solicitud de reembolso", la app lo une sola a esta boleta (en unos minutos) y después reconoce sola la respuesta.</div>' +
+      '<details class="respaldo"><summary>¿Pasó más de un día y sigue aquí?</summary>' +
+        '<div class="intro">Anota el N° de solicitud que te dio Esencial y la app la sigue con ese número.</div>' +
+        '<div class="form"><label><input type="text" id="folio" inputmode="numeric" autocomplete="off" placeholder="N° de solicitud de Esencial"></label></div>' +
+        '<button class="btn sec" data-ingresado="' + esc(b.id) + '">Anotar N°</button></details>';
   }
 
   // En la app instalada del iPhone, un enlace normal se abre en un navegador interno que se
@@ -588,7 +592,7 @@
       const id = ing.dataset.ingresado;
       ing.disabled = true; ing.textContent = 'Anotando…';
       try { const j = await post({ accion: 'ingresado', id, folio }); $('folio').value = ''; aviso(j.mensaje, 'ok'); await cargar(true); hojaBoleta(id); }
-      catch (x) { aviso('No se pudo anotar: ' + x.message, 'error'); ing.disabled = false; ing.textContent = 'Ya la ingresé'; }
+      catch (x) { aviso('No se pudo anotar: ' + x.message, 'error'); ing.disabled = false; ing.textContent = 'Anotar N°'; }
     }
   });
 
